@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# big binaries — keep STEP/GLB out of git until you decide on Git LFS
+assets/render/
+*.mp4
+*.gif

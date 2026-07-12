@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "palhil"
+version = "0.0.1"
+description = "HIL palletizing cell: UR20, 3 infeed lanes -> 3 pallets, closed around a real TwinCAT PLC"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+web = ["websockets>=12"]
+mujoco = ["mujoco>=3.1"]
+twincat = ["pyads>=3.4"]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "rig: needs the human's TwinCAT rig (live PLC + ADS); set PALHIL_RIG=1 to run. Skipped on the desk.",
+]
