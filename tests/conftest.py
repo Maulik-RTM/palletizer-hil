@@ -22,6 +22,11 @@ BOX_MASS_KG = 6.9                  # gross weight (payload; refinement B derate)
 PALLET_LW_M = (1.200, 1.000)       # pallet footprint (data sheet, NOT EUR 1200x800)
 LAYERS = 5                         # 18/layer x 5 = 90/pallet (data sheet)
 
+from palhil.plant.pallet_pattern import column_pattern  # noqa: E402
+
+CAPACITY = sum(1 for s in column_pattern(BOX_LWH_M, PALLET_LW_M, LAYERS)
+               if s.pallet == 0)   # 90 slots/pallet
+
 
 @pytest.fixture
 def run_cell():

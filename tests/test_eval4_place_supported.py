@@ -12,7 +12,7 @@ RED until `KinematicPalletCell` + `column_pattern` land (plan.md phase 3).
 Test hooks (`lane_pick_pose`, `set_lane_box`, `slot_world_pose`) are ground-truth
 accessors the phase-3 plant provides for evals; never routed to the controller.
 """
-import pytest
+import numpy as np
 
 from palhil.constitution import EVAL_PROVENANCE
 from palhil.interfaces import Commands
@@ -41,9 +41,17 @@ def _picked_plant():
     return plant
 
 
-def _release_at(plant, pose, steps=400):
-    for _ in range(steps):
-        plant.actuate(Commands(tcp_target=pose, vacuum_cmd=False))  # release
+def _place_at(plant, pose, max_steps=3000):
+    """Carry to the slot holding vacuum, arrive, THEN release -- the real place
+    protocol. (Releasing mid-air would correctly drop the box: vacuum off while
+    not over a slot = a dropped box, not a placement.)"""
+    for _ in range(max_steps):
+        plant.actuate(Commands(tcp_target=pose, vacuum_cmd=True))
+        plant.step(CYCLE_S)
+        if np.linalg.norm(np.array(plant.sense().tcp_pose[:3]) - np.array(pose[:3])) < 1e-3:
+            break
+    for _ in range(20):
+        plant.actuate(Commands(tcp_target=pose, vacuum_cmd=False))  # release at the slot
         plant.step(CYCLE_S)
     return plant.sense()
 
@@ -56,7 +64,7 @@ def test_supported_bottom_slot_counts_as_placed():
     """Release into a deck-supported bottom-layer slot -> placed, z within tol."""
     plant = _picked_plant()
     bottom = next(s for s in _slots() if s.pallet == 0 and s.layer == 0)
-    _release_at(plant, plant.slot_world_pose(bottom))
+    _place_at(plant, plant.slot_world_pose(bottom))
     assert plant.ledger().on_pallet == 1
     assert plant.sense().pallet_count[0] == 1
 
@@ -65,7 +73,7 @@ def test_release_over_missing_support_does_not_count():
     """Release into an upper-layer slot with nothing beneath -> NOT placed (P3/P8)."""
     plant = _picked_plant()
     upper = next(s for s in _slots() if s.pallet == 0 and s.layer == 1)
-    _release_at(plant, plant.slot_world_pose(upper))
+    _place_at(plant, plant.slot_world_pose(upper))
     assert plant.ledger().on_pallet == 0, "box floated: unsupported release counted"
     assert plant.sense().pallet_count[0] == 0
     assert plant.ledger().conserved()               # the box went somewhere accountable

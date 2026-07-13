@@ -45,7 +45,9 @@ def _one_cycle_tcp_displacement(part_held: bool) -> float:
             plant.step(CYCLE_S)
         assert plant.sense().part_held
     start = np.array(plant.sense().tcp_pose[:3])
-    far = tuple(start + np.array([1.0, 0.0, 0.0])) + tuple(plant.sense().tcp_pose[3:])
+    # move straight up 0.3 m -- far enough not to snap, and in reach from both the
+    # home and the pick start (so the plant integrates rather than rejecting, P4).
+    far = tuple(start + np.array([0.0, 0.0, 0.3])) + tuple(plant.sense().tcp_pose[3:])
     plant.actuate(Commands(tcp_target=far, vacuum_cmd=part_held, speed_scale=1.0))
     plant.step(CYCLE_S)
     return float(np.linalg.norm(np.array(plant.sense().tcp_pose[:3]) - start))
