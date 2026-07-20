@@ -28,8 +28,12 @@ def main() -> int:
                     help="drive the cell with a live TwinCAT PLC over ADS (phase 5; else mock)")
     ap.add_argument("--realbot", action="store_true",
                     help="render the real UR20 CAD (loads per-link glTF); else a stylized arm")
+    ap.add_argument("--realbot-abb", dest="realbot_abb", action="store_true",
+                    help="ABB IRB2600 backend: real per-link CAD + MuJoCo IK (no UR20). "
+                         "Needs [cad]+[mujoco] and scripts/build_irb2600_glb.py.")
     args = ap.parse_args()
-    serve(args.host, args.port, args.plc, "real" if args.realbot else "stylized")
+    robot = "abb" if args.realbot_abb else ("real" if args.realbot else "stylized")
+    serve(args.host, args.port, args.plc, robot)
     return 0
 
 

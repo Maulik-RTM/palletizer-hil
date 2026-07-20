@@ -50,8 +50,9 @@ GRIP_DWELL_S = 0.10
 # descent beside one).
 COLLIDE_XY_M = geo.BOX_LWH_M[1] - 0.01               # ~box width (0.19) minus eps
 COLLIDE_Z_TOL_M = 0.02                                # sink allowed before it's a hit
-DECEL_DIST_M = 0.08                                   # ease-in radius around a target
-DECEL_MIN_FRAC = 0.12                                 # never fully stall inside it
+A_TCP_EMPTY_MS2 = 8.0                                 # TCP accel cap (empty) -- smooth ramp,
+#   so the arm eases OUT of a waypoint as well as INTO it (no snap). Refinement B
+#   derates accel with load too (see _servo), which keeps eval8 valid.
 
 V_TCP_EMPTY_MS = 3.0                                  # ideal-kinematic servo speed
 DERATE = MAX_JOINT_SPEED_LOADED / MAX_JOINT_SPEED_EMPTY   # refinement B (=0.5)
@@ -67,6 +68,7 @@ class KinematicPalletCell:
         self._rng = np.random.default_rng(seed)
         self.t_ns = 0
         self.tcp = np.array(geo.home_pose(), dtype=float)
+        self._speed = 0.0                              # current TCP speed (m/s) for the accel ramp
         self._cmd = Commands(tcp_target=geo.home_pose())
         self.part_held = False
         self._dwell_s = 0.0
@@ -136,14 +138,21 @@ class KinematicPalletCell:
         if np.linalg.norm(target[:3]) > REACH_ENVELOPE_M:
             self.reach_violations += 1                 # P4: reject, do not move
             return
-        v = V_TCP_EMPTY_MS * cmd.speed_scale
-        if self.part_held:
-            v = min(v, V_TCP_EMPTY_MS * DERATE)        # B: plant enforces the derate
+        v_cap = V_TCP_EMPTY_MS * cmd.speed_scale
+        a_max = A_TCP_EMPTY_MS2
+        if self.part_held:                             # B: load derates BOTH speed and accel
+            v_cap = min(v_cap, V_TCP_EMPTY_MS * DERATE)
+            a_max *= DERATE
         to = target[:3] - self.tcp[:3]
         d = float(np.linalg.norm(to))
-        step = v * dt
-        if d < DECEL_DIST_M:                            # ease in near the target so the
-            step *= max(d / DECEL_DIST_M, DECEL_MIN_FRAC)  # box settles gently, not slammed
+        # trapezoidal profile: cruise at v_cap but stay slow enough to brake to a stop
+        # by the target (sqrt(2*a*d)); ramp the speed toward that within a_max, so the
+        # arm accelerates AND decelerates smoothly -- eases out of a waypoint, no snap.
+        v_des = min(v_cap, float(np.sqrt(2.0 * a_max * d)))
+        dv = a_max * dt
+        # ramp current speed toward v_des, clamped to +/- dv (accel limit), floored at 0
+        self._speed = max(0.0, min(self._speed + dv, max(self._speed - dv, v_des)))
+        step = self._speed * dt
         if d <= step or d < 1e-12:
             self.tcp[:3] = target[:3]
         else:

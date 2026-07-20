@@ -68,23 +68,26 @@ def display_ik(tcp_pose, seed):
         return (seed if seed is not None else np.zeros(6)), seed
 
 
-def _realbot_links_present() -> bool:
-    """True iff a full set of per-link glTF exists (built from per-link STEP). A
-    fused-assembly heuristic split scatters, so --realbot only articulates real CAD
-    when every named link is on disk; otherwise the viewer falls back to stylized."""
-    robot_dir = os.path.join(STATIC, "robot")
-    return all(os.path.exists(os.path.join(robot_dir, nm + ".glb"))
-               for nm in ur20_pose.LINK_NAMES)
+ABB_LINK_NAMES = ["base_link", "link_1", "link_2", "link_3", "link_4", "link_5", "link_6"]
+
+
+def _links_present(subdir: str, names) -> bool:
+    d = os.path.join(STATIC, subdir)
+    return all(os.path.exists(os.path.join(d, nm + ".glb")) for nm in names)
 
 
 def cell_config(robot_model: str = "stylized") -> dict:
     """Geometry the viewer needs, derived from the ONE shared map (geometry.py),
-    so the view can never drift from the plant (P2). If 'real' is asked but the
-    per-link glTF is not built, downgrade to 'stylized' rather than render a
-    scattered arm (honest fallback)."""
-    if robot_model == "real" and not _realbot_links_present():
+    so the view can never drift from the plant (P2). If 'real'/'abb' is asked but
+    the per-link glTF is not built, downgrade to 'stylized' rather than render a
+    broken arm (honest fallback)."""
+    if robot_model == "real" and not _links_present("robot", ur20_pose.LINK_NAMES):
         print("[web] --realbot: per-link glTF missing -> stylized arm (build them "
               "from per-link STEP: scripts/build_ur20_glb.py). Real pallets/boxes stay.")
+        robot_model = "stylized"
+    if robot_model == "abb" and not _links_present("robot_abb", ABB_LINK_NAMES):
+        print("[web] --realbot-abb: IRB2600 glTF missing -> stylized arm "
+              "(run scripts/build_irb2600_glb.py). Pallets/boxes stay.")
         robot_model = "stylized"
     pl, pw = geo.PALLET_LW_M
     pallets = []
@@ -104,7 +107,7 @@ def cell_config(robot_model: str = "stylized") -> dict:
         "lanes": [[round(v, 4) for v in geo.LANE_STOP_XYZ[i]] for i in range(geo.N_LANES)],
         "pallets": pallets,
         "dh": [[float(DH[i, 0]), float(DH[i, 1]), float(DH[i, 2])] for i in range(6)],
-        "link_names": ur20_pose.LINK_NAMES,
+        "link_names": ABB_LINK_NAMES if robot_model == "abb" else ur20_pose.LINK_NAMES,
     }
 
 
@@ -195,7 +198,18 @@ async def control_loop(app, plc_ams: str | None = None) -> None:
                     plant.actuate(cmd)
                     if dt > 0:
                         plant.step(dt)
-            joints, seed = display_ik(plant.sense().tcp_pose, seed)
+            tcp = plant.sense().tcp_pose
+            abb_links = None
+            if app.get("robot") == "abb":            # ABB backend: MuJoCo IK, no UR
+                from ...plant import abb_kinematics as abb
+                q = abb.ik(tcp[:3], seed)
+                if q is not None:
+                    seed = q
+                joints = [0.0] * 6                     # unused by the ABB viewer
+                if seed is not None:
+                    abb_links = abb.link_transforms(seed)   # per-link world transforms
+            else:
+                joints, seed = display_ik(tcp, seed)
             # render-only: the yaw the carried box will be placed at, so the viewer
             # can rotate it in flight (mock loop only exposes the controller target;
             # a live PLC does not, so it falls back to 0 -- purely cosmetic).
@@ -204,6 +218,9 @@ async def control_loop(app, plc_ams: str | None = None) -> None:
                     and ctrl.pallet is not None:
                 carry_yaw = float(geo.PALLET_YAW_RAD[ctrl.pallet] + ctrl._slot.pose[3])
             snap = snapshot(plant, joints, carry_yaw)
+            if abb_links is not None:
+                snap["links"] = [[[round(v, 4) for v in pos], [round(v, 5) for v in quat]]
+                                 for pos, quat in abb_links]
             snap["source"] = app.get("source", "mock controller")
             await _broadcast(app["clients"], snap)
             await asyncio.sleep(1.0 / SNAP_HZ)

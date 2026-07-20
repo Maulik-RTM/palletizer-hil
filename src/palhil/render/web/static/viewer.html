@@ -37,7 +37,9 @@ const fill=new THREE.DirectionalLight(0xa8bcff,0.45); fill.position.set(-2.5,2,-
 const mat=(c,m=0.2,r=0.7)=>new THREE.MeshStandardMaterial({color:c,metalness:m,roughness:r});
 const M={ steel:mat(0x8a9099,0.7,0.45), joint:mat(0x2b2f36,0.5,0.6), floor:mat(0x2a2d33,0,1),
           box:mat(0xc79a5b,0,0.85), boxAlt:mat(0xb5854a,0,0.85), pallet:mat(0x6b4d31,0,0.92),
-          gripper:mat(0x3a3f47,0.6,0.4), lane:mat(0x30343c,0.2,0.8), tcp:mat(0x35b05a,0,0.6) };
+          gripper:mat(0x3a3f47,0.6,0.4), lane:mat(0x30343c,0.2,0.8), tcp:mat(0x35b05a,0,0.6),
+          abb:mat(0xee7d00,0.25,0.55), abbGrey:mat(0x59606b,0.6,0.5),
+          suction:mat(0x18181c,0.1,0.9), manifold:mat(0x3a3f47,0.5,0.5) };
 
 // ---- WORLD group: plant is z-up (metres); rotate so plant (x,y,z) -> three (x,z,-y)
 const W=new THREE.Group(); W.rotation.x=-Math.PI/2; scene.add(W);
@@ -88,7 +90,7 @@ function buildCell(cfg){
   // lane stubs (visual)
   for(const L of cfg.lanes){ const s=addBox(CFG.box[0]*1.4,CFG.box[1]*1.4,0.04,M.lane); s.position.set(L[0],L[1],L[2]-0.14); }
   // robot
-  if(MODE==='real') buildRealArm(cfg); else buildStylizedArm();
+  if(MODE==='abb') buildAbbArm(cfg); else if(MODE==='real') buildRealArm(cfg); else buildStylizedArm();
   document.getElementById('boot')?.remove();
 }
 
@@ -126,9 +128,58 @@ function poseReal(joints){
     o.matrix.copy(F[i].clone().multiply(HOME_INV[i])); }   // M_i applied to home-pose mesh
 }
 
+// ABB (--realbot-abb): real per-link IRB2600 CAD placed by server-computed world
+// transforms (MuJoCo FK), so the viewer needs no ABB kinematics of its own.
+// a compact vacuum end-effector (Schmalz-style single suction pad) authored in the
+// plant frame pointing straight DOWN: cup contact at z=0, manifold + adapter above.
+// ~0.12 m wide -- smaller than the 0.31x0.19 box. Placed at the TCP each frame.
+function makeSuctionGripper(){
+  const g=new THREE.Group();
+  const adapter=new THREE.Mesh(new THREE.CylinderGeometry(0.035,0.035,0.10,20),M.abbGrey);
+  adapter.rotation.x=Math.PI/2; adapter.position.z=0.115; g.add(adapter);       // up to the flange
+  const manifold=new THREE.Mesh(new THREE.BoxGeometry(0.12,0.09,0.035),M.manifold);
+  manifold.position.z=0.05; g.add(manifold);
+  const cup=new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.038,0.032,24),M.suction);
+  cup.rotation.x=Math.PI/2; cup.position.z=0.016; g.add(cup);                    // flared pad, contact at z~0
+  return g;
+}
+
+function buildAbbArm(cfg){
+  // pedestal grounding the floor-standing robot to the floor (base_link sits at
+  // the base-frame origin; the deck is mount_height below it)
+  const ped=new THREE.Mesh(new THREE.CylinderGeometry(0.26,0.30,cfg.mount_height,28),M.abbGrey);
+  ped.rotation.x=Math.PI/2; ped.position.set(0,0,-cfg.mount_height/2); W.add(ped);
+  const loader=new THREE.GLTFLoader(); arm={parts:{}, names:cfg.link_names, ready:0};
+  cfg.link_names.forEach((nm,i)=>{ if(i===6) return;   // skip the oversized wrist flange mesh
+    loader.load(`/static/robot_abb/${nm}.glb`, g=>{
+      const o=g.scene; o.matrixAutoUpdate=false;
+      o.traverse(m=>{ if(m.isMesh){ m.material=M.abb; m.geometry.computeVertexNormals(); } });
+      arm.parts[i]=o; W.add(o); arm.ready++;
+    }, undefined, ()=>console.warn('missing ABB link glTF:', nm)); });
+  // vacuum pad RIGID to the flange (link_6): IK targets the flange origin at the
+  // TCP, so the cup sits at the flange and the mount extends back to the wrist.
+  // Parenting (not TCP-pinning) keeps it on the arm even when IK lags/can't reach.
+  const flange=new THREE.Object3D(); flange.matrixAutoUpdate=false; W.add(flange);
+  const grip=makeSuctionGripper(); grip.rotation.y=-Math.PI/2; flange.add(grip);
+  arm.flange=flange;
+}
+function poseAbb(links){
+  if(!arm||arm.ready===0||!links) return;
+  const s=new THREE.Vector3(1,1,1);
+  for(let i=0;i<links.length;i++){ const o=arm.parts[i]; if(!o) continue;
+    const [p,q]=links[i];                                    // q = MuJoCo (w,x,y,z), plant frame
+    o.matrix.compose(new THREE.Vector3(p[0],p[1],p[2]),
+                     new THREE.Quaternion(q[1],q[2],q[3],q[0]), s); }
+  if(arm.flange && links[6]){ const [p,q]=links[6];          // gripper rides the flange
+    arm.flange.matrix.compose(new THREE.Vector3(p[0],p[1],p[2]),
+                              new THREE.Quaternion(q[1],q[2],q[3],q[0]), s);
+    arm.flange.matrixWorldNeedsUpdate=true; }
+}
+
 // ---- snapshot handling -----------------------------------------------------
 function applySnapshot(s){
-  (MODE==='real'?poseReal:poseStylized)(s.joints);
+  if(MODE==='abb') poseAbb(s.links);                    // gripper rides the flange (see poseAbb)
+  else (MODE==='real'?poseReal:poseStylized)(s.joints);
   // placed boxes (pool, grows only)
   for(let k=0;k<s.placed.length;k++){ let m=placedPool[k];
     if(!m){ m=addCarton(k%2?M.boxAlt:M.box); placedPool[k]=m; }

@@ -82,7 +82,11 @@ APPROACH_CLEARANCE_M = 0.12            # hover height above a pick/place point
 # straight vertical.
 PALLET_CLEAR_Z_M = DECK_Z_M + (LAYERS + 1) * BOX_LWH_M[2] + 0.06
 CARRY_HEIGHT_M = PALLET_CLEAR_Z_M      # lane lift rises to the same clear height
-HOME_XYZ = (0.40, 0.0, 0.40)
+# Home doubles as the between-cycles VIA point. Keep it WIDE of the base: a close,
+# low rest pose (e.g. 0.4,0,0.4) lands in a 6-axis robot's inner-radius dead-zone,
+# where numerical IK finds no solution and grinds -- stalling the render loop. This
+# point sits comfortably in every backend's envelope.
+HOME_XYZ = (0.60, 0.0, 0.60)
 REACH_TOL_M = 0.006                    # controller sequencing tolerance
 # gross ~6.9 kg on a 20 kg robot is a light load -> mild derate (placeholder).
 LOADED_SPEED_SCALE = 0.75              # refinement B (revisit with the real curve)
