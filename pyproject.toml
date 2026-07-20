@@ -11,7 +11,7 @@ dependencies = ["numpy>=1.24"]
 
 [project.optional-dependencies]
 web = ["aiohttp>=3.9"]              # GPU-free Three.js viewer streamed over WebSocket (no Isaac)
-cad = ["cascadio>=0.1", "trimesh>=4"]  # STEP -> glTF for the --realbot viewer
+cad = ["cascadio>=0.0.17", "trimesh>=4"]  # STEP -> glTF for the --realbot viewer
 mujoco = ["mujoco>=3.1"]
 twincat = ["pyads>=3.4"]
 dev = ["pytest>=8"]

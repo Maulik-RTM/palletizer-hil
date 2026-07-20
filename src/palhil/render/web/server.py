@@ -49,28 +49,53 @@ def _rotvec_to_T(pose) -> np.ndarray:
 
 
 def display_ik(tcp_pose, seed):
-    """Recover joints for rendering, PREFERRING the branch nearest the seed to keep
-    the arm continuous. This reduces but does not eliminate flips: a wrist-
-    singularity crossing (theta5 through 0) still reconfigures theta4/theta6 by ~pi
-    on ~1% of frames -- a cosmetic snap in the view, never a control effect (the
-    plant tracks the TCP directly; these joints are display-only). Falls back to
-    the seed if the pose is momentarily unreachable (never crashes the view)."""
+    """Recover joints for rendering. The branch is chosen ELBOW-UP once (the
+    practical palletizing posture) when unseeded, then held by nearest-seed
+    continuity so the arm stays elbow-up and does not flip mid-cycle. With the
+    two-pallets-either-side layout this measured 0 snaps over a full run (the arm
+    no longer swings ~180 deg across the cell). These joints are display-only --
+    the plant tracks the TCP directly, so a display reconfiguration is never a
+    control effect. Falls back to the seed if the pose is momentarily unreachable
+    (never crashes the view)."""
     try:
-        q = ik(_rotvec_to_T(tcp_pose), q_seed=seed)
+        # Restrict to the elbow-UP branch EVERY frame (nearest-seed only WITHIN that
+        # set), so the arm can never drift elbow-down on the far/high layers -- then
+        # hold continuity inside the up-set. On the compact 3x3 deck elbow-up is
+        # reachable at every slot, so this stays snap-free.
+        q = ik(_rotvec_to_T(tcp_pose), q_seed=seed, prefer_elbow_up=True)
         return q, q
     except Unreachable:
         return (seed if seed is not None else np.zeros(6)), seed
 
 
+ABB_LINK_NAMES = ["base_link", "link_1", "link_2", "link_3", "link_4", "link_5", "link_6"]
+
+
+def _links_present(subdir: str, names) -> bool:
+    d = os.path.join(STATIC, subdir)
+    return all(os.path.exists(os.path.join(d, nm + ".glb")) for nm in names)
+
+
 def cell_config(robot_model: str = "stylized") -> dict:
     """Geometry the viewer needs, derived from the ONE shared map (geometry.py),
-    so the view can never drift from the plant (P2)."""
+    so the view can never drift from the plant (P2). If 'real'/'abb' is asked but
+    the per-link glTF is not built, downgrade to 'stylized' rather than render a
+    broken arm (honest fallback)."""
+    if robot_model == "real" and not _links_present("robot", ur20_pose.LINK_NAMES):
+        print("[web] --realbot: per-link glTF missing -> stylized arm (build them "
+              "from per-link STEP: scripts/build_ur20_glb.py). Real pallets/boxes stay.")
+        robot_model = "stylized"
+    if robot_model == "abb" and not _links_present("robot_abb", ABB_LINK_NAMES):
+        print("[web] --realbot-abb: IRB2600 glTF missing -> stylized arm "
+              "(run scripts/build_irb2600_glb.py). Pallets/boxes stay.")
+        robot_model = "stylized"
     pl, pw = geo.PALLET_LW_M
     pallets = []
-    for p in range(3):
-        yaw = float(geo.PALLET_YAW_RAD[p])
-        cx = geo.PALLET_CENTER_R_M * np.cos(yaw)
-        cy = geo.PALLET_CENTER_R_M * np.sin(yaw)
+    for p in range(geo.N_PALLETS):
+        pos = float(geo.PALLET_POS_RAD[p])              # where the pallet sits
+        yaw = float(geo.PALLET_YAW_RAD[p])              # how the deck is oriented
+        cx = geo.PALLET_CENTER_R_M * np.cos(pos)
+        cy = geo.PALLET_CENTER_R_M * np.sin(pos)
         pallets.append({"center": [round(cx, 4), round(cy, 4), round(geo.DECK_Z_M, 4)],
                         "yaw": round(yaw, 4), "lw": [pl, pw], "h": 0.16})
     return {
@@ -78,15 +103,20 @@ def cell_config(robot_model: str = "stylized") -> dict:
         "mount_height": geo.MOUNT_HEIGHT_M,
         "reach": REACH_M,
         "box": list(geo.BOX_LWH_M),
-        "lanes": [[round(v, 4) for v in geo.LANE_STOP_XYZ[i]] for i in range(3)],
+        "capacity": geo.CAPACITY_PER_PALLET,
+        "lanes": [[round(v, 4) for v in geo.LANE_STOP_XYZ[i]] for i in range(geo.N_LANES)],
         "pallets": pallets,
         "dh": [[float(DH[i, 0]), float(DH[i, 1]), float(DH[i, 2])] for i in range(6)],
-        "link_names": ur20_pose.LINK_NAMES,
+        "link_names": ABB_LINK_NAMES if robot_model == "abb" else ur20_pose.LINK_NAMES,
     }
 
 
-def snapshot(plant, joints) -> dict:
-    """JSON-safe snapshot of the plant, built from the public seam only (P2)."""
+def snapshot(plant, joints, carry_yaw: float = 0.0) -> dict:
+    """JSON-safe snapshot of the plant, built from the public seam only (P2).
+
+    carry_yaw is the world yaw the carried box will be PLACED at -- render-only
+    metadata so the viewer can rotate the box in flight to its final orientation
+    instead of snapping 90 deg at placement. It never feeds control."""
     s = plant.sense()
     led = plant.ledger()
     placed = []
@@ -99,7 +129,8 @@ def snapshot(plant, joints) -> dict:
     carry = None
     if s.part_held:
         x, y, z = s.tcp_pose[:3]
-        carry = [round(x, 4), round(y, 4), round(z - geo.BOX_LWH_M[2] / 2, 4), 0.0]
+        carry = [round(x, 4), round(y, 4), round(z - geo.BOX_LWH_M[2] / 2, 4),
+                 round(float(carry_yaw), 4)]
     return {
         "t": round(plant.t_ns / 1e9, 3),
         "tcp": [round(float(v), 4) for v in s.tcp_pose],
@@ -115,6 +146,7 @@ def snapshot(plant, joints) -> dict:
             "infed": led.infed, "on_lane": led.on_lane, "on_gripper": led.on_gripper,
             "on_pallet": led.on_pallet, "rejected": led.rejected,
             "conserved": bool(led.conserved()), "reach": int(plant.reach_violations),
+            "collision": int(getattr(plant, "collision_violations", 0)),
         },
     }
 
@@ -166,8 +198,29 @@ async def control_loop(app, plc_ams: str | None = None) -> None:
                     plant.actuate(cmd)
                     if dt > 0:
                         plant.step(dt)
-            joints, seed = display_ik(plant.sense().tcp_pose, seed)
-            snap = snapshot(plant, joints)
+            tcp = plant.sense().tcp_pose
+            abb_links = None
+            if app.get("robot") == "abb":            # ABB backend: MuJoCo IK, no UR
+                from ...plant import abb_kinematics as abb
+                q = abb.ik(tcp[:3], seed)
+                if q is not None:
+                    seed = q
+                joints = [0.0] * 6                     # unused by the ABB viewer
+                if seed is not None:
+                    abb_links = abb.link_transforms(seed)   # per-link world transforms
+            else:
+                joints, seed = display_ik(tcp, seed)
+            # render-only: the yaw the carried box will be placed at, so the viewer
+            # can rotate it in flight (mock loop only exposes the controller target;
+            # a live PLC does not, so it falls back to 0 -- purely cosmetic).
+            carry_yaw = 0.0
+            if ctrl is not None and getattr(ctrl, "_slot", None) is not None \
+                    and ctrl.pallet is not None:
+                carry_yaw = float(geo.PALLET_YAW_RAD[ctrl.pallet] + ctrl._slot.pose[3])
+            snap = snapshot(plant, joints, carry_yaw)
+            if abb_links is not None:
+                snap["links"] = [[[round(v, 4) for v in pos], [round(v, 5) for v in quat]]
+                                 for pos, quat in abb_links]
             snap["source"] = app.get("source", "mock controller")
             await _broadcast(app["clients"], snap)
             await asyncio.sleep(1.0 / SNAP_HZ)

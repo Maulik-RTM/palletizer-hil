@@ -15,12 +15,13 @@ CYCLE_S = 0.002
 
 # --- cell geometry from assets/Palletizer-Master_Format.xlsx -------------------
 # Real product data (rows 1-12): shipper 310x190x230 mm, gross ~6.9 kg, single
-# SKU size globally. 18 shippers/layer x 5 layers = 90/pallet on a 1200x1000
-# pallet. Supersedes plan.md's simplified 1200x800 / 4x3 figures.
+# SKU size globally. SIMPLIFIED (human-directed): a compact 3x3 layer (9 boxes)
+# on a deck sized to fit, so every slot stays well inside reach (elbow-up). Must
+# match geometry.PALLET_LW_M -> 9/layer x 5 = 45/pallet.
 BOX_LWH_M = (0.310, 0.190, 0.230)  # shipper L x W x H
 BOX_MASS_KG = 6.9                  # gross weight (payload; refinement B derate)
-PALLET_LW_M = (1.200, 1.000)       # pallet footprint (data sheet, NOT EUR 1200x800)
-LAYERS = 5                         # 18/layer x 5 = 90/pallet (data sheet)
+PALLET_LW_M = (3 * 0.310 + 0.02, 3 * 0.190 + 0.02)   # (0.95, 0.59) -- 3x3 layer
+LAYERS = 5                         # 9/layer x 5 = 45/pallet
 
 from palhil.plant.pallet_pattern import column_pattern  # noqa: E402
 

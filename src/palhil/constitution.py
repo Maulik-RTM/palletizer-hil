@@ -64,8 +64,9 @@ EVAL_PROVENANCE = {
     "eval3_pick_coincidence":("P3", "P2", "desk: pick latches only on pose AND vacuum-window AND presence"),
     "eval4_place_supported": ("P3", "P8", "desk: box settles in its slot, supported, z-err < tol"),
     "eval5_latency":         ("P1", "A",  "rig: <10 ms round-trip, sigma<1 ms jitter, FAST tier"),
-    "eval6_conservation":    ("P8",       "desk: ledger balances every step, all three lanes"),
-    "eval7_pattern_fill":    ("P8", "P2", "desk: 3 pallets fill their commanded patterns, no double-fill, full pallet blocks lane"),
+    "eval6_conservation":    ("P8",       "desk: ledger balances every step, single source"),
+    "eval7_pattern_fill":    ("P8", "P2", "desk: 2 pallets fill from one source, no double-fill, full pallet blocks the lane"),
     "eval8_payload_derate":  ("B",  "P4", "desk: loaded-vs-empty carry respects the derated limits"),
+    "eval9_self_collision":  ("P4", "P8", "desk: carried box clears the stack via the pallet via-point; no box-box interpenetration on any carry path"),
     "eval10_calibration":    ("P5", "P3", "desk: bias<0.5 mm AND success<=noise ceiling"),
 }

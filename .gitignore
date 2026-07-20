@@ -11,3 +11,7 @@ venv/
 assets/render/
 *.mp4
 *.gif
+# built by scripts/build_ur20_glb.py (regenerable)
+*.glb
+# vendor CAD drops (e.g. ABB IRB660 dwg)
+*.zip

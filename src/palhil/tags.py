@@ -13,20 +13,20 @@ FAST = {
     "GVL_Pal.jointsAct":    "ARRAY[0..5] OF LREAL",  # deg
     "GVL_Pal.vacuumOn":     "BOOL",
     "GVL_Pal.partHeld":     "BOOL",
-    "GVL_Pal.lanePresent":  "ARRAY[0..2] OF BOOL",
+    "GVL_Pal.lanePresent":  "ARRAY[0..0] OF BOOL",   # N_LANES = 1 (one source)
     # commands (PLC -> Python plant)
     "GVL_Pal.tcpCmd":       "ARRAY[0..5] OF LREAL",
     "GVL_Pal.speedScale":   "LREAL",
     "GVL_Pal.vacuumCmd":    "BOOL",
-    "GVL_Pal.laneRelease":  "ARRAY[0..2] OF BOOL",
+    "GVL_Pal.laneRelease":  "ARRAY[0..0] OF BOOL",   # N_LANES = 1
     # the clock (P1) -- the sim derives dt from THIS, never its own clock
     "GVL_Pal.timeNs":       "LINT",
     "GVL_Pal.enable":       "BOOL",
 }
 
-SLOW = {
-    "GVL_Pal.palletCount":  "ARRAY[0..2] OF INT",
-    "GVL_Pal.palletFull":   "ARRAY[0..2] OF BOOL",
-    "GVL_Pal.palletSwapAck":"ARRAY[0..2] OF BOOL",
-    "GVL_Pal.patternId":    "ARRAY[0..2] OF INT",
+SLOW = {                                             # N_PALLETS = 2 (two stations)
+    "GVL_Pal.palletCount":  "ARRAY[0..1] OF INT",
+    "GVL_Pal.palletFull":   "ARRAY[0..1] OF BOOL",
+    "GVL_Pal.palletSwapAck":"ARRAY[0..1] OF BOOL",
+    "GVL_Pal.patternId":    "ARRAY[0..1] OF INT",
 }

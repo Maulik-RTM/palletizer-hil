@@ -1,9 +1,12 @@
-"""MockCellController unit tests (plan.md phase 2 exit): claim priority, freeze
-on !enable, pallet-full blocking. The controller is a pure Sensors->Commands
-function plus internal state; these drive it with crafted samples (no plant).
+"""MockCellController unit tests (plan.md phase 2 exit): claim, active-pallet
+fill-then-switch, freeze on !enable, both-full blocking. The controller is a pure
+Sensors->Commands function plus internal state; these drive it with crafted
+samples (no plant).
+
+SIMPLIFIED CELL: one source, two pallets (geometry.N_LANES / N_PALLETS).
 
 Cites: P2 (acts only on the sampled tag map), P1 (owns the one clock),
-P8 (a full pallet blocks its lane), refinement B (loaded derate)."""
+P8 (both pallets full blocks the source), refinement B (loaded derate)."""
 from palhil import geometry as geo
 from palhil.interfaces import Sensors
 from palhil.plc.cell_controller import (
@@ -15,8 +18,9 @@ from palhil.plc.cell_controller import (
 
 def _sensors(**kw):
     d = dict(tcp_pose=geo.home_pose(), joints=(0.0,) * 6, vacuum_on=False,
-             part_held=False, lane_present=(False, False, False),
-             pallet_count=(0, 0, 0), pallet_full=(False, False, False), time_ns=0)
+             part_held=False, lane_present=(False,) * geo.N_LANES,
+             pallet_count=(0,) * geo.N_PALLETS,
+             pallet_full=(False,) * geo.N_PALLETS, time_ns=0)
     d.update(kw)
     return Sensors(**d)
 
@@ -29,57 +33,50 @@ def test_clock_is_monotonic_and_owned():
     assert c.time_ns() == 2 * 2_000_000            # advanced by two 2 ms cycles (P1)
 
 
-def test_idle_with_no_boxes_stays_home():
+def test_idle_with_no_box_stays_home():
     c = MockCellController()
-    cmd = c.step(_sensors(lane_present=(False, False, False)))
+    cmd = c.step(_sensors(lane_present=(False,)))
     assert c.state == IDLE and c.lane is None
     assert cmd.tcp_target == geo.home_pose() and cmd.vacuum_cmd is False
 
 
-def test_claim_picks_a_present_lane():
+def test_claim_when_box_present_and_a_pallet_has_room():
     c = MockCellController()
-    c.step(_sensors(lane_present=(False, True, True)))   # lanes 1,2 have boxes
-    assert c.lane == 1 and c.state == APPROACH_PICK      # lowest eligible index first
+    c.step(_sensors(lane_present=(True,)))
+    assert c.lane == 0 and c.state == APPROACH_PICK
+    assert c.pallet == 0                                 # first pallet is the active one
 
 
-def test_claim_is_round_robin_so_no_lane_starves():
+def test_active_pallet_switches_when_the_first_is_full():
+    """The single source feeds the next non-full pallet (fill one, then the other)."""
     c = MockCellController()
-    # after a claim the pointer advances, so the next scan starts past it
-    c._rr = 1
-    assert c._select_lane(_sensors(lane_present=(True, True, True))) == 1
-    c._rr = 2
-    assert c._select_lane(_sensors(lane_present=(True, True, True))) == 2
-    c._rr = 2                                             # wraps around, still fair
-    assert c._select_lane(_sensors(lane_present=(True, True, False))) == 0
+    c.step(_sensors(lane_present=(True,), pallet_full=(True, False)))
+    assert c.pallet == 1, "must target the pallet that still has room"
 
 
-def test_full_pallet_blocks_its_lane():
+def test_both_pallets_full_blocks_the_source():
     c = MockCellController()
-    s = _sensors(lane_present=(True, True, True), pallet_full=(True, False, False))
-    cmd = c.step(s)
-    assert c.lane == 1, "must not claim the lane feeding a full pallet"
-    assert cmd.lane_release[0] is False                  # blocked (P8)
-    assert cmd.lane_release[1] is True and cmd.lane_release[2] is True
-
-
-def test_no_claim_when_all_pallets_full():
-    c = MockCellController()
-    cmd = c.step(_sensors(lane_present=(True, True, True),
-                          pallet_full=(True, True, True)))
+    cmd = c.step(_sensors(lane_present=(True,), pallet_full=(True, True)))
     assert c.state == IDLE and c.lane is None
-    assert cmd.lane_release == (False, False, False)
+    assert cmd.lane_release == (False,)                  # nowhere to place -> block (P8)
+
+
+def test_source_released_while_any_pallet_has_room():
+    c = MockCellController()
+    cmd = c.step(_sensors(lane_present=(False,), pallet_full=(True, False)))
+    assert cmd.lane_release == (True,)                   # pallet 1 still open
 
 
 def test_freeze_holds_pose_and_vacuum_when_disabled():
     c = MockCellController()
-    c.step(_sensors(lane_present=(True, False, False)))  # claim -> vacuum plan begins
+    c.step(_sensors(lane_present=(True,)))               # claim -> vacuum plan begins
     held_target, held_vac = c._target, c._vacuum
     c.enabled = False
-    cmd = c.step(_sensors(lane_present=(True, False, False)))
+    cmd = c.step(_sensors(lane_present=(True,)))
     assert cmd.enable is False
     assert cmd.tcp_target == held_target                 # pose held
     assert cmd.vacuum_cmd == held_vac                    # vacuum unchanged
-    assert cmd.lane_release == (False, False, False)
+    assert cmd.lane_release == (False,) * geo.N_LANES
     assert cmd.speed_scale == 0.0
     assert c.time_ns() > 0                                # the clock still free-runs (P1)
 
