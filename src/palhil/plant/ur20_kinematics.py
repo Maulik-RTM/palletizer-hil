@@ -142,7 +142,17 @@ def _branches(T: np.ndarray):
     _branches.saw_singular = saw_singular
 
 
-def ik(T: np.ndarray, q_seed: np.ndarray | None = None) -> np.ndarray:
+def _elbow_z(q: np.ndarray) -> float:
+    """Height (base-frame z) of the ELBOW = the end of the upper arm, i.e. the
+    frame-2 origin (A1 @ A2). The wrist centre (through a3) is fixed by the target
+    pose, so it can't tell the branches apart; the elbow position is what flips
+    between elbow-UP and elbow-DOWN. Higher = elbow-up, the practical posture."""
+    T = _dh_T(q[0], *DH[0]) @ _dh_T(q[1], *DH[1])
+    return float(T[2, 3])
+
+
+def ik(T: np.ndarray, q_seed: np.ndarray | None = None,
+       prefer_elbow_up: bool = False) -> np.ndarray:
     """Analytic UR20 6R IK (P4).
 
     - enumerates the (<=8) closed-form branches, keeps only the ones that FK
@@ -151,6 +161,11 @@ def ik(T: np.ndarray, q_seed: np.ndarray | None = None) -> np.ndarray:
       seed-chained path holds ONE configuration end-to-end (no elbow/wrist flip);
     - raises Unreachable outside the envelope -- NEVER silently clamps;
     - rejects solutions inside the wrist-singularity guard band.
+
+    prefer_elbow_up (RENDER use): restrict to the highest-elbow branch before the
+    nearest-seed pick, so the shown arm holds an elbow-UP posture instead of the
+    impractical elbow-down one. Default False keeps the control/eval contract
+    (eval1/eval2) exactly as before.
 
     Contract: fk(ik(T)) position error < 0.5 mm (eval1); seed-chained continuity
     (eval2). q_seed=None picks the branch nearest the zero configuration.
@@ -162,6 +177,16 @@ def ik(T: np.ndarray, q_seed: np.ndarray | None = None) -> np.ndarray:
         if getattr(_branches, "saw_singular", False):
             raise Unreachable("wrist singularity: no non-singular branch for this pose")
         raise Unreachable("target outside the UR20 reach envelope")
+
+    if prefer_elbow_up:
+        # elbow-up is a BOOLEAN (elbow above the base plane), not "the single
+        # highest": keep EVERY elbow-up branch -- both shoulder and both wrist
+        # sub-branches -- so nearest-seed can hold shoulder/wrist continuity. Using
+        # the max would drop the current shoulder branch whenever the other one's
+        # elbow sat slightly higher, forcing a base flip (the observed snap).
+        up = [q for q in cands if _elbow_z(q) > 0.0]
+        if up:
+            cands = up
 
     ref = np.zeros(6) if q_seed is None else np.asarray(q_seed, dtype=float)
     best = min(cands, key=lambda q: np.linalg.norm(

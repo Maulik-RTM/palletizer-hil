@@ -13,25 +13,34 @@ from typing import Protocol
 
 @dataclass
 class Sensors:
-    """Plant -> controller, one sample. Units: m, m/s, rad, bool. (P2)"""
+    """Plant -> controller, one sample. Units: m, m/s, rad, bool. (P2)
+
+    lane/pallet arrays are length geometry.N_LANES / N_PALLETS (the simplified
+    cell is 1 source + 2 pallets); the seam is count-agnostic, driven by those
+    constants, so the same contract survives a topology change.
+    """
     tcp_pose: tuple[float, float, float, float, float, float]  # x y z rx ry rz
     joints: tuple[float, ...]                                  # 6 joint angles
     vacuum_on: bool
     part_held: bool
-    lane_present: tuple[bool, bool, bool]     # box at each lane stop
-    pallet_count: tuple[int, int, int]        # boxes placed per pallet
-    pallet_full: tuple[bool, bool, bool]
+    lane_present: tuple[bool, ...]            # box at each lane stop (N_LANES)
+    pallet_count: tuple[int, ...]             # boxes placed per pallet (N_PALLETS)
+    pallet_full: tuple[bool, ...]
     time_ns: int                              # the CONTROLLER's clock (P1)
 
 
 @dataclass
 class Commands:
-    """Controller -> plant, one sample. (P2)"""
+    """Controller -> plant, one sample. (P2)
+
+    lane_release is length N_LANES, pallet_swap_ack length N_PALLETS; defaults
+    match the simplified 1-source / 2-pallet cell.
+    """
     tcp_target: tuple[float, float, float, float, float, float]
     speed_scale: float = 1.0                  # derated when loaded (refinement B)
     vacuum_cmd: bool = False
-    lane_release: tuple[bool, bool, bool] = (False, False, False)
-    pallet_swap_ack: tuple[bool, bool, bool] = (False, False, False)
+    lane_release: tuple[bool, ...] = (False,)
+    pallet_swap_ack: tuple[bool, ...] = (False, False)
     enable: bool = True
 
 

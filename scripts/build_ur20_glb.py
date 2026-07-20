@@ -34,7 +34,9 @@ def _find_step_files():
     files = []
     for p in pats:
         files += glob.glob(os.path.join(SRC_DIR, p))
-    return sorted(set(files))
+    # keep real files only: the vendor drop nests the STEP inside a directory that
+    # is itself named "UR20.step", which the glob would otherwise return as a file.
+    return sorted(f for f in set(files) if os.path.isfile(f))
 
 
 def main() -> int:
@@ -61,11 +63,24 @@ def main() -> int:
         print(f"wrote {len(per_link)} per-link glTF -> {OUT}  ({total/1e6:.2f} MB)")
         return 0
 
-    # (b) single assembly STEP -> whole glb, then try to split by scene geometry
+    # (b) single assembly STEP -> whole glb. The z-order split into DH links is a
+    # FRAGILE heuristic: a fused vendor assembly exports its solids around the CAD
+    # origin, not at each DH frame_i(0), so M_i = frame_i(q) @ frame_i(0)^-1
+    # SCATTERS them in the viewer (verified on the UR20 vendor STEP). It is only
+    # meaningful if the STEP's solids already sit at their home-frame locations, so
+    # it is now OPT-IN behind --split. Default: write ur20_full.glb only; the
+    # viewer needs per-link STEP (branch a) for a correct articulated --realbot.
+    do_split = "--split" in sys.argv
     src = files[0]
     full = os.path.join(OUT, "ur20_full.glb")
     cascadio.step_to_glb(src, full, TOL_LINEAR, TOL_ANGULAR)
     print(f"converted {src} -> {full}  ({os.path.getsize(full)/1e6:.2f} MB)")
+    if not do_split:
+        print("[split] fused assembly: NOT auto-splitting (the z-order heuristic "
+              "scatters a fused STEP). For an articulated --realbot, export per-link "
+              f"STEP named {LINK_NAMES} into assets/step/ and rerun. Pass --split to "
+              "force the heuristic anyway (verify visually).")
+        return 0
     try:
         import trimesh
         scene = trimesh.load(full)

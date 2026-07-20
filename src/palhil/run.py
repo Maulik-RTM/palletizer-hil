@@ -2,8 +2,9 @@
 
 Closes the loop over the MockCellController and the KinematicPalletCell under the
 PLC-clock discipline (P1: dt comes from the controller's clock, never wall time),
-fills the three pallets, prints picks/places per pallet + the conservation ledger
-(P8), and self-scores eval10 (calibration, P5/P3). This loop is the gold standard
+fills the two pallets from the single source, prints picks/places per pallet + the
+conservation ledger (P8) + collision violations (P4/P8, eval9), and self-scores
+eval10 (calibration, P5/P3). This loop is the gold standard
 the TwinCAT / MuJoCo / Isaac backends must reproduce (P6, statistical).
 """
 from __future__ import annotations
@@ -21,7 +22,7 @@ def _bar(x, width=28):
 
 
 def run_loop(seed: int = 3, max_steps: int = 800_000):
-    """Fill all three pallets; return (plant, steps, conserved_every_step)."""
+    """Fill both pallets; return (plant, steps, conserved_every_step)."""
     plant = KinematicPalletCell(seed=seed)
     ctrl = MockCellController()
     prev = ctrl.time_ns()
@@ -55,14 +56,15 @@ def main():
 
     print(f"\nClosed loop (P1/P2) -- controller sees only Sensors, plant only Commands")
     print(f"  ran {steps} cycles  (~{sim_s:.1f} s sim @ 2 ms)")
-    for i in range(3):
+    for i in range(len(s.pallet_count)):
         c = s.pallet_count[i]
         print(f"  pallet {i}: {c:3d}/{CAPACITY_PER_PALLET}  "
               f"|{_bar(c / CAPACITY_PER_PALLET)}|  full={s.pallet_full[i]}")
     print(f"\nLedger (P8)  infed={led.infed}  on_lane={led.on_lane}  "
           f"on_gripper={led.on_gripper}  on_pallet={led.on_pallet}  rejected={led.rejected}")
     print(f"  conserved every step: {'YES' if conserved else 'NO -- P8 VIOLATION'}  "
-          f"| reach violations (P4): {plant.reach_violations}")
+          f"| reach violations (P4): {plant.reach_violations}"
+          f"  | collision violations (P4/P8, eval9): {plant.collision_violations}")
 
     e10 = run_eval10(Scenario(vision_offset=default_offset(deg=0.4),
                               pose_sigma_mm=0.15, seed=3))

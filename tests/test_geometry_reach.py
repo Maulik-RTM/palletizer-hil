@@ -15,7 +15,7 @@ from palhil.plant.ur20_kinematics import Unreachable, fk, ik
 
 def _all_commanded_poses():
     poses = {"home": geo.home_pose()}
-    for i in range(3):
+    for i in range(geo.N_LANES):
         poses[f"lane{i}_pick"] = geo.lane_pick_pose(i)
         poses[f"lane{i}_approach"] = geo.lane_approach_pose(i)
         poses[f"lane{i}_carry"] = geo.carry_pose_over(geo.LANE_STOP_XYZ[i])
@@ -23,6 +23,7 @@ def _all_commanded_poses():
         tag = f"p{s.pallet}_l{s.layer}_i{s.index}"
         poses[f"slot_{tag}"] = geo.slot_world_pose(s)
         poses[f"approach_{tag}"] = geo.slot_approach_pose(s)
+        poses[f"clear_{tag}"] = geo.slot_clear_pose(s)   # pallet-clearing via-point
     return poses
 
 
@@ -52,7 +53,7 @@ def test_every_commanded_pose_is_within_the_reach_limit():
 
 def test_ik_solves_for_lane_picks_and_every_slot():
     worst = 0.0
-    for i in range(3):
+    for i in range(geo.N_LANES):
         _check_ik(geo.lane_pick_pose(i), worst)
     for s in geo.PATTERN:
         worst = _check_ik(geo.slot_world_pose(s), worst)

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Slot:
-    pallet: int          # 0..2
+    pallet: int          # 0..N_PALLETS-1
     layer: int
     index: int
     pose: tuple[float, float, float, float]   # x, y, z, yaw -- pallet frame
@@ -61,13 +61,16 @@ def _base_layer(box_lwh_m: tuple[float, float, float],
 
 def column_pattern(box_lwh_m: tuple[float, float, float],
                    pallet_lw_m: tuple[float, float],
-                   layers: int) -> list[Slot]:
-    """Column-stack pattern for one SKU across all three pallets (P8).
+                   layers: int,
+                   npallets: int = 2) -> list[Slot]:
+    """Column-stack pattern for one SKU across `npallets` pallets (P8).
 
-    Builds the real 18-box base layer (_base_layer) and stacks `layers` identical
-    copies. Layers are identical, so a box in layer L rests directly on the box
-    at the same (x, y, yaw) in layer L-1 -- the support relation the plant checks
-    (P3/P8). Slots come out in PLACE order: bottom layer first, far corner first.
+    The simplified cell has 2 pallet stations (see geometry.N_PALLETS); geometry
+    passes that count in. Builds the real 18-box base layer (_base_layer) and
+    stacks `layers` identical copies. Layers are identical, so a box in layer L
+    rests directly on the box at the same (x, y, yaw) in layer L-1 -- the support
+    relation the plant checks (P3/P8). Slots come out in PLACE order: bottom layer
+    first, far corner first.
 
     Slot.pose = (x, y, z, yaw) in the pallet frame: (x, y) box-center on the deck,
     z the box base height for that layer, yaw 0 (width-wise) or pi/2 (length-wise).
@@ -75,7 +78,7 @@ def column_pattern(box_lwh_m: tuple[float, float, float],
     base = _base_layer(box_lwh_m, pallet_lw_m)
     bh = box_lwh_m[2]
     slots: list[Slot] = []
-    for pallet in range(3):
+    for pallet in range(npallets):
         idx = 0
         for layer in range(layers):
             for x, y, yaw in base:

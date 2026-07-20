@@ -1,8 +1,10 @@
 """The pure kinematic plant (default backend). Phase 3 (plan.md).
 
-Owns: 3 infeed lanes with stochastic box streams, the UR20 as an ideal servo
-integrating the commanded TCP at the derated speed, vacuum grasp adjudication,
-3 pallets with slot occupancy, and the Ledger. It SENSES and ACTUATES only --
+Owns: the infeed lane(s) with stochastic box streams (the simplified cell has
+ONE source), the UR20 as an ideal servo integrating the commanded TCP at the
+derated speed, vacuum grasp adjudication, N_PALLETS pallets with slot occupancy,
+and the Ledger. It also tracks collision_violations (P4/P8: a carried box that
+sweeps through a placed one). It SENSES and ACTUATES only --
 it never decides control (P2/P3 split): the controller says where to go and when
 to grip; the PLANT alone decides whether a pick/place actually happened.
 
@@ -40,6 +42,16 @@ from .ur20_kinematics import (
 POS_TOL_M = 0.005
 SLOT_TOL_M = 0.010
 GRIP_DWELL_S = 0.10
+# collision-floor check (P4/P8): while carrying, the box base (~TCP z) must clear
+# every placed box it SWEEPS OVER. "Sweep" = predominantly horizontal motion: a
+# vertical plunge straight DOWN into the target column is legal palletizing even
+# though it passes beside edge-adjacent full stacks, so we only flag when the
+# horizontal step exceeds the vertical one (a traverse through a stack, not a
+# descent beside one).
+COLLIDE_XY_M = geo.BOX_LWH_M[1] - 0.01               # ~box width (0.19) minus eps
+COLLIDE_Z_TOL_M = 0.02                                # sink allowed before it's a hit
+DECEL_DIST_M = 0.08                                   # ease-in radius around a target
+DECEL_MIN_FRAC = 0.12                                 # never fully stall inside it
 
 V_TCP_EMPTY_MS = 3.0                                  # ideal-kinematic servo speed
 DERATE = MAX_JOINT_SPEED_LOADED / MAX_JOINT_SPEED_EMPTY   # refinement B (=0.5)
@@ -58,9 +70,13 @@ class KinematicPalletCell:
         self._cmd = Commands(tcp_target=geo.home_pose())
         self.part_held = False
         self._dwell_s = 0.0
-        self.lanes = [{"present": False} for _ in range(3)]
+        self.lanes = [{"present": False} for _ in range(geo.N_LANES)]
         self.occupied: set[tuple[int, int]] = set()   # (pallet, slot.index)
         self.reach_violations = 0
+        self.collision_violations = 0                 # P4/P8: carried box swept a placed one
+        self._placed_xy: list[tuple[float, float]] = []   # base-frame (x, y) of placed boxes
+        self._placed_top: list[float] = []                # their top z (collision floor)
+        self._prev_xyz = (float(self.tcp[0]), float(self.tcp[1]), float(self.tcp[2]))
         # ledger counters (P8)
         self.infed = 0
         self.on_lane = 0
@@ -70,7 +86,7 @@ class KinematicPalletCell:
 
     # -- interfaces.Plant -----------------------------------------------------
     def sense(self) -> Sensors:
-        count = tuple(self._count(p) for p in range(3))
+        count = tuple(self._count(p) for p in range(geo.N_PALLETS))
         return Sensors(
             tcp_pose=tuple(self.tcp),
             joints=(0.0,) * 6,                        # kinematic servo tracks TCP directly
@@ -93,10 +109,13 @@ class KinematicPalletCell:
 
         self._feed_lanes(cmd, dt)
         self._servo(cmd, dt)
+        if self.part_held:
+            self._check_collision()                    # P4/P8: after the move, before release
         if not self.part_held:
             self._adjudicate_pick(cmd, dt)
         elif not cmd.vacuum_cmd:                       # release while holding
             self._adjudicate_release()
+        self._prev_xyz = (float(self.tcp[0]), float(self.tcp[1]), float(self.tcp[2]))
 
     def ledger(self) -> Ledger:
         return Ledger(self.infed, self.on_lane, self.on_gripper,
@@ -123,6 +142,8 @@ class KinematicPalletCell:
         to = target[:3] - self.tcp[:3]
         d = float(np.linalg.norm(to))
         step = v * dt
+        if d < DECEL_DIST_M:                            # ease in near the target so the
+            step *= max(d / DECEL_DIST_M, DECEL_MIN_FRAC)  # box settles gently, not slammed
         if d <= step or d < 1e-12:
             self.tcp[:3] = target[:3]
         else:
@@ -162,8 +183,36 @@ class KinematicPalletCell:
         if best is not None and bd < SLOT_TOL_M and self._supported(best):
             self.occupied.add((best.pallet, best.index))
             self.on_pallet += 1
+            wp = geo.slot_world_pose(best)            # wp[2] is the box TOP (see geometry)
+            self._placed_xy.append((wp[0], wp[1]))
+            self._placed_top.append(wp[2])
         else:
             self.rejected += 1                        # dropped: unsupported or off-slot
+
+    def _check_collision(self) -> None:
+        """P4/P8: while carrying, the box must clear every box already placed that
+        it SWEEPS OVER. The tool grips the box top, so the carried box BASE sits
+        BOX_H below the TCP; a hit = that base dips below a placed box's top within
+        a box-width horizontally WHILE moving mostly horizontally (a traverse
+        through the stack). A straight-down plunge into the target column is exempt
+        -- it legally descends beside edge-adjacent full stacks -- so we require the
+        horizontal step to exceed the vertical. The via-point keeps this at zero; a
+        low traverse trips it."""
+        if not self._placed_xy:
+            return
+        px, py, _pz = self._prev_xyz
+        cx, cy = float(self.tcp[0]), float(self.tcp[1])
+        cbase = float(self.tcp[2]) - geo.BOX_LWH_M[2]   # carried box BASE (hangs below tool)
+        pbase = _pz - geo.BOX_LWH_M[2]
+        dxy = np.hypot(cx - px, cy - py)
+        dz = abs(cbase - pbase)
+        if dxy <= dz:            # a vertical plunge into the target column is legal
+            return
+        xy = np.asarray(self._placed_xy)
+        top = np.asarray(self._placed_top)
+        near = (xy[:, 0] - cx) ** 2 + (xy[:, 1] - cy) ** 2 < COLLIDE_XY_M ** 2
+        if np.any(near & (cbase < top - COLLIDE_Z_TOL_M)):
+            self.collision_violations += 1
 
     def _supported(self, slot: Slot) -> bool:
         if slot.layer == 0:

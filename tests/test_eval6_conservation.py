@@ -1,10 +1,10 @@
 """eval6_conservation (P8): the ledger balances every step over a long seeded run.
 
 EVAL_PROVENANCE['eval6_conservation'] = (P8, "desk: ledger balances every step,
-all three lanes"). infed == on_lane + on_gripper + on_pallet + rejected, checked
-after EVERY step of a long, seeded, three-lane run (the `run_cell` harness asserts
-it each tick; here we also demand the run actually did work, so the balance is
-non-trivial).
+single source"). infed == on_lane + on_gripper + on_pallet + rejected, checked
+after EVERY step of a long, seeded run of the one-source cell (the `run_cell`
+harness asserts it each tick; here we also demand the run actually did work, so
+the balance is non-trivial).
 
 RED until `MockCellController` + `KinematicPalletCell` land (plan.md phase 2/3).
 """
@@ -20,7 +20,7 @@ def test_cites_constitution():
 
 
 def test_ledger_conserved_every_step_long_run(run_cell):
-    """eval6: 40 s of closed loop across all three lanes, conserved throughout."""
+    """eval6: 40 s of closed loop on the single source, conserved throughout."""
     plant = KinematicPalletCell(seed=7)                 # NotImplementedError -> RED
     ctrl = MockCellController()
     run_cell(plant, ctrl, steps=20_000)                 # ~40 s at the 2 ms cycle

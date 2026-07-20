@@ -65,6 +65,11 @@ let DH=null, HOME=null, HOME_INV=null;
 let CFG=null, MODE='stylized'; let arm=null; const placedPool=[]; const lanePool=[]; let carryMesh=null;
 function box(sx,sy,sz,material){ return new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz),material); }
 function addBox(sx,sy,sz,material){ const m=box(sx,sy,sz,material); W.add(m); return m; }
+// a CARTON is drawn slightly smaller than its true cell so adjacent boxes show a
+// visible seam (~CARTON_GAP between neighbours) -- a stack of boxes, not a wall.
+const CARTON_GAP=0.01;
+function addCarton(material){ return addBox(Math.max(CFG.box[0]-CARTON_GAP,0.02),
+  Math.max(CFG.box[1]-CARTON_GAP,0.02), Math.max(CFG.box[2]-CARTON_GAP,0.02), material); }
 
 function rod(material,rA=0.05,rB=null){ const m=new THREE.Mesh(new THREE.CylinderGeometry(rA,rB==null?rA:rB,1,14),material);
   W.add(m); return m; }
@@ -126,16 +131,21 @@ function applySnapshot(s){
   (MODE==='real'?poseReal:poseStylized)(s.joints);
   // placed boxes (pool, grows only)
   for(let k=0;k<s.placed.length;k++){ let m=placedPool[k];
-    if(!m){ m=addBox(CFG.box[0],CFG.box[1],CFG.box[2], k%2?M.boxAlt:M.box); placedPool[k]=m; }
-    const [x,y,z,yaw]=s.placed[k]; m.visible=true; m.position.set(x,y,z+CFG.box[2]/2); m.rotation.z=yaw; }
+    if(!m){ m=addCarton(k%2?M.boxAlt:M.box); placedPool[k]=m; }
+    const [x,y,z,yaw]=s.placed[k]; m.visible=true; m.position.set(x,y,z-CFG.box[2]/2); m.rotation.z=yaw; }
   for(let k=s.placed.length;k<placedPool.length;k++) placedPool[k].visible=false;
   // lane boxes
   for(let k=0;k<lanePool.length;k++) lanePool[k].visible=false;
-  s.lanes.forEach((L,k)=>{ let m=lanePool[k]; if(!m){ m=addBox(CFG.box[0],CFG.box[1],CFG.box[2],M.box); lanePool[k]=m; }
+  s.lanes.forEach((L,k)=>{ let m=lanePool[k]; if(!m){ m=addCarton(M.box); lanePool[k]=m; }
     m.visible=true; m.position.set(L[1],L[2],L[3]-CFG.box[2]/2); m.rotation.z=0; });
-  // carried box
-  if(s.carry){ if(!carryMesh) carryMesh=addBox(CFG.box[0],CFG.box[1],CFG.box[2],M.box);
-    carryMesh.visible=true; carryMesh.position.set(s.carry[0],s.carry[1],s.carry[2]); }
+  // carried box -- rotate GRACEFULLY toward its placement yaw during flight
+  // (s.carry[3]) instead of snapping at placement; start each pick at lane yaw 0.
+  if(s.carry){ if(!carryMesh) carryMesh=addCarton(M.box);
+    const fresh=!carryMesh.visible; carryMesh.visible=true;
+    carryMesh.position.set(s.carry[0],s.carry[1],s.carry[2]);
+    if(fresh) carryMesh.rotation.z=0;
+    let d=(s.carry[3]||0)-carryMesh.rotation.z; d=Math.atan2(Math.sin(d),Math.cos(d));
+    carryMesh.rotation.z+=d*0.25; }
   else if(carryMesh) carryMesh.visible=false;
   hud(s);
 }
@@ -143,10 +153,10 @@ function applySnapshot(s){
 function hud(s){ const L=s.ledger;
   document.getElementById('hud').innerHTML=
     `<b>palletizer-hil cell</b>  (${s.source||'mock'})   t=${s.t.toFixed(1)}s\n`+
-    `pallets  ${s.pallet_count.map((c,i)=>`${c}${s.pallet_full[i]?'*':''}`).join('  ')}   (of ${3*90})\n`+
+    `pallets  ${s.pallet_count.map((c,i)=>`${c}${s.pallet_full[i]?'*':''}`).join('  ')}   (of ${s.pallet_count.length*(CFG.capacity||90)})\n`+
     `held ${L.on_gripper?'BOX':' — '}   vacuum ${s.vacuum?'ON':'off'}\n`+
     `ledger infed ${L.infed}  lane ${L.on_lane}  grip ${L.on_gripper}  pallet <b>${L.on_pallet}</b>  rej ${L.rejected}\n`+
-    `conserved <span class="${L.conserved?'ok':'bad'}">${L.conserved?'yes':'NO'}</span>   reach viol ${L.reach}`;
+    `conserved <span class="${L.conserved?'ok':'bad'}">${L.conserved?'yes':'NO'}</span>   reach viol ${L.reach}   collide ${L.collision??0}`;
 }
 
 // ---- boot ------------------------------------------------------------------
